@@ -9,7 +9,7 @@ import {
   ChangeEvent,
 } from 'react'
 
-import { fs, AppConfiguration } from '@janhq/core'
+import { fs } from '@janhq/core'
 import { Switch, Button, Input } from '@janhq/uikit'
 
 import ShortcutModal from '@/containers/ShortcutModal'
@@ -19,6 +19,8 @@ import { toaster } from '@/containers/Toast'
 import { FeatureToggleContext } from '@/context/FeatureToggle'
 
 import { useSettings } from '@/hooks/useSettings'
+
+import DataFolder from './DataFolder'
 
 const Advanced = () => {
   const {
@@ -50,17 +52,6 @@ const Advanced = () => {
     [setPartialProxy, setProxy]
   )
 
-  // TODO: remove me later.
-  const [currentPath, setCurrentPath] = useState('')
-
-  useEffect(() => {
-    window.core?.api
-      ?.getAppConfigurations()
-      ?.then((appConfig: AppConfiguration) => {
-        setCurrentPath(appConfig.data_folder)
-      })
-  }, [])
-
   useEffect(() => {
     readSettings().then((settings) => {
       setGpuEnabled(settings.run_mode === 'gpu')
@@ -81,35 +72,6 @@ const Advanced = () => {
     })
   }
 
-  const onJanVaultDirectoryClick = async () => {
-    const destFolder = await window.core?.api?.selectDirectory()
-    if (destFolder) {
-      console.debug(`Destination folder selected: ${destFolder}`)
-
-      try {
-        const appConfiguration: AppConfiguration =
-          await window.core?.api?.getAppConfigurations()
-        const currentJanDataFolder = appConfiguration.data_folder
-        if (currentJanDataFolder === destFolder) {
-          console.debug(
-            `Destination folder is the same as current folder. Ignore..`
-          )
-          return
-        }
-        appConfiguration.data_folder = destFolder
-
-        await fs.syncFile(currentJanDataFolder, destFolder)
-        await window.core?.api?.updateAppConfiguration(appConfiguration)
-        console.debug(
-          `File sync finished from ${currentJanDataFolder} to ${destFolder}`
-        )
-        await window.core?.api?.relaunch()
-      } catch (e) {
-        console.error(`Error: ${e}`)
-      }
-    }
-  }
-
   const handleGPUChange = (gpuId: string) => {
     let updatedGpusInUse = [...gpusInUse]
     if (updatedGpusInUse.includes(gpuId)) {
@@ -126,76 +88,30 @@ const Advanced = () => {
 
   return (
     <div className="block w-full">
-      {/* CPU / GPU switching */}
-      {!isMac && (
-        <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-          <div className="w-4/5 flex-shrink-0 space-y-1.5">
-            <div className="flex gap-x-2">
-              <h6 className="text-sm font-semibold capitalize">NVidia GPU</h6>
-            </div>
-            <p className="whitespace-pre-wrap leading-relaxed">
-              Enable GPU acceleration for NVidia GPUs.
-            </p>
+      {/* Keyboard shortcut  */}
+      <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
+        <div className="flex-shrink-0 space-y-1.5">
+          <div className="flex gap-x-2">
+            <h6 className="text-sm font-semibold capitalize">
+              Keyboard Shortcuts
+            </h6>
           </div>
-          <Switch
-            checked={gpuEnabled}
-            onCheckedChange={(e: boolean) => {
-              if (e === true) {
-                saveSettings({ runMode: 'gpu' })
-                setGpuEnabled(true)
-                setShowNotification(false)
-                setTimeout(() => {
-                  validateSettings()
-                }, 300)
-              } else {
-                saveSettings({ runMode: 'cpu' })
-                setGpuEnabled(false)
-              }
-            }}
-          />
+          <p className="leading-relaxed">
+            Shortcuts that you might find useful in Jan app.
+          </p>
         </div>
-      )}
-      {gpuEnabled && (
-        <div className="mt-4">
-          <label className="block text-sm font-medium text-gray-700">
-            Select GPU(s)
-          </label>
-          <div className="mt-2 space-y-2">
-            {gpuList.map((gpu) => (
-              <div key={gpu.id}>
-                <input
-                  type="checkbox"
-                  id={`gpu-${gpu.id}`}
-                  name="gpu"
-                  value={gpu.id}
-                  checked={gpusInUse.includes(gpu.id)}
-                  onChange={() => handleGPUChange(gpu.id)}
-                />
-                <label htmlFor={`gpu-${gpu.id}`}>
-                  {' '}
-                  {gpu.name} (VRAM: {gpu.vram} MB)
-                </label>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      {/* Warning message */}
-      {gpuEnabled && gpusInUse.length > 1 && (
-        <p className="mt-2 italic text-red-500">
-          If enabling multi-GPU without the same GPU model or without NVLink, it
-          may affect token speed.
-        </p>
-      )}
+        <ShortcutModal />
+      </div>
+
       {/* Experimental */}
       <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-        <div className="w-4/5 flex-shrink-0 space-y-1.5">
+        <div className="flex-shrink-0 space-y-1.5">
           <div className="flex gap-x-2">
             <h6 className="text-sm font-semibold capitalize">
               Experimental Mode
             </h6>
           </div>
-          <p className="whitespace-pre-wrap leading-relaxed">
+          <p className="leading-relaxed">
             Enable experimental features that may be unstable tested.
           </p>
         </div>
@@ -210,13 +126,81 @@ const Advanced = () => {
           }}
         />
       </div>
+
+      {/* CPU / GPU switching */}
+      {!isMac && (
+        <div className="flex w-full flex-col border-b border-border py-4 first:pt-0 last:border-none">
+          <div className="flex items-start justify-between">
+            <div className="flex-shrink-0 space-y-1.5">
+              <div className="flex gap-x-2">
+                <h6 className="text-sm font-semibold capitalize">NVidia GPU</h6>
+              </div>
+              <p className="leading-relaxed">
+                Enable GPU acceleration for NVidia GPUs.
+              </p>
+            </div>
+            <Switch
+              checked={gpuEnabled}
+              onCheckedChange={(e: boolean) => {
+                if (e === true) {
+                  saveSettings({ runMode: 'gpu' })
+                  setGpuEnabled(true)
+                  setShowNotification(false)
+                  setTimeout(() => {
+                    validateSettings()
+                  }, 300)
+                } else {
+                  saveSettings({ runMode: 'cpu' })
+                  setGpuEnabled(false)
+                }
+              }}
+            />
+          </div>
+
+          {gpuEnabled && (
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700">
+                Select GPU(s)
+              </label>
+              <div className="mt-2 space-y-2">
+                {gpuList.map((gpu) => (
+                  <div key={gpu.id} className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id={`gpu-${gpu.id}`}
+                      name="gpu"
+                      value={gpu.id}
+                      checked={gpusInUse.includes(gpu.id)}
+                      onChange={() => handleGPUChange(gpu.id)}
+                    />
+                    <label htmlFor={`gpu-${gpu.id}`}>
+                      {gpu.name} (VRAM: {gpu.vram} MB)
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {gpuEnabled && gpusInUse.length > 1 && (
+            <p className="mt-2 italic text-red-500">
+              If enabling multi-GPU without the same GPU model or without
+              NVLink, it may affect token speed.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Directory */}
+      {experimentalFeature && <DataFolder />}
+
       {/* Proxy */}
       <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-        <div className="w-4/5 flex-shrink-0 space-y-1.5">
+        <div className="flex-shrink-0 space-y-1.5">
           <div className="flex gap-x-2">
             <h6 className="text-sm font-semibold capitalize">HTTPS Proxy</h6>
           </div>
-          <p className="whitespace-pre-wrap leading-relaxed">
+          <p className="leading-relaxed">
             Specify the HTTPS proxy or leave blank (proxy auto-configuration and
             SOCKS not supported).
           </p>
@@ -227,15 +211,16 @@ const Advanced = () => {
           />
         </div>
       </div>
+
       {/* Ignore SSL certificates */}
       <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-        <div className="w-4/5 flex-shrink-0 space-y-1.5">
+        <div className="flex-shrink-0 space-y-1.5">
           <div className="flex gap-x-2">
             <h6 className="text-sm font-semibold capitalize">
               Ignore SSL certificates
             </h6>
           </div>
-          <p className="whitespace-pre-wrap leading-relaxed">
+          <p className="leading-relaxed">
             Allow self-signed or unverified certificates - may be required for
             certain proxies.
           </p>
@@ -251,78 +236,18 @@ const Advanced = () => {
           }}
         />
       </div>
-      {window.electronAPI && (
-        <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-          <div className="w-4/5 flex-shrink-0 space-y-1.5">
-            <div className="flex gap-x-2">
-              <h6 className="text-sm font-semibold capitalize">
-                Open App Directory
-              </h6>
-            </div>
-            <p className="whitespace-pre-wrap leading-relaxed">
-              Open the directory where your app data, like conversation history
-              and model configurations, is located.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            themes="secondary"
-            onClick={() => window.electronAPI.openAppDirectory()}
-          >
-            Open
-          </Button>
-        </div>
-      )}
+
+      {/* Claer log */}
       <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-        <div className="w-4/5 flex-shrink-0 space-y-1.5">
+        <div className="flex-shrink-0 space-y-1.5">
           <div className="flex gap-x-2">
             <h6 className="text-sm font-semibold capitalize">Clear logs</h6>
           </div>
-          <p className="whitespace-pre-wrap leading-relaxed">
-            Clear all logs from Jan app.
-          </p>
+          <p className="leading-relaxed">Clear all logs from Jan app.</p>
         </div>
-        <Button size="sm" themes="secondary" onClick={clearLogs}>
+        <Button size="sm" themes="secondaryDanger" onClick={clearLogs}>
           Clear
         </Button>
-      </div>
-      {experimentalFeature && (
-        <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-          <div className="w-4/5 flex-shrink-0 space-y-1.5">
-            <div className="flex gap-x-2">
-              <h6 className="text-sm font-semibold capitalize">
-                Jan Data Folder
-              </h6>
-            </div>
-            <p className="whitespace-pre-wrap leading-relaxed">
-              Where messages, model configurations, and other user data is
-              placed.
-            </p>
-            <p className="whitespace-pre-wrap leading-relaxed text-gray-500">
-              {`${currentPath}`}
-            </p>
-          </div>
-          <Button
-            size="sm"
-            themes="secondary"
-            onClick={onJanVaultDirectoryClick}
-          >
-            Select
-          </Button>
-        </div>
-      )}
-      <div className="flex w-full items-start justify-between border-b border-border py-4 first:pt-0 last:border-none">
-        <div className="w-4/5 flex-shrink-0 space-y-1.5">
-          <div className="flex gap-x-2">
-            <h6 className="text-sm font-semibold capitalize">
-              Keyboard Shortcuts
-            </h6>
-          </div>
-          <p className="whitespace-pre-wrap leading-relaxed">
-            Shortcuts that you might find useful in Jan app.
-          </p>
-        </div>
-        <ShortcutModal />
       </div>
     </div>
   )
