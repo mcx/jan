@@ -70,7 +70,7 @@ const Providers = (props: PropsWithChildren) => {
   return (
     <JotaiWrapper>
       <ThemeWrapper>
-        <Umami/>
+        <Umami />
         {setupCore && activated && (
           <KeyListener>
             <FeatureToggleWrapper>
