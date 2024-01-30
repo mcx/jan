@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useRef } from 'react'
 
 import {
   ChatCompletionMessage,
@@ -13,16 +14,20 @@ import {
   Model,
   ConversationalExtension,
   MessageEvent,
+  InferenceEngine,
+  ChatCompletionMessageContentType,
+  AssistantTool,
 } from '@janhq/core'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { atom, useAtom, useAtomValue, useSetAtom } from 'jotai'
 
 import { ulid } from 'ulid'
 
 import { selectedModelAtom } from '@/containers/DropdownListSidebar'
-import { currentPromptAtom } from '@/containers/Providers/Jotai'
+import { currentPromptAtom, fileUploadAtom } from '@/containers/Providers/Jotai'
 
 import { toaster } from '@/containers/Toast'
 
+import { getBase64 } from '@/utils/base64'
 import { toRuntimeParams, toSettingParams } from '@/utils/modelParam'
 
 import { useActiveModel } from './useActiveModel'
@@ -42,28 +47,31 @@ import {
   updateThreadWaitingForResponseAtom,
 } from '@/helpers/atoms/Thread.atom'
 
+export const queuedMessageAtom = atom(false)
+export const reloadModelAtom = atom(false)
+
 export default function useSendChatMessage() {
   const activeThread = useAtomValue(activeThreadAtom)
   const addNewMessage = useSetAtom(addNewMessageAtom)
   const updateThread = useSetAtom(updateThreadAtom)
   const updateThreadWaiting = useSetAtom(updateThreadWaitingForResponseAtom)
-  const [currentPrompt, setCurrentPrompt] = useAtom(currentPromptAtom)
+  const setCurrentPrompt = useSetAtom(currentPromptAtom)
 
   const currentMessages = useAtomValue(getCurrentChatMessagesAtom)
   const { activeModel } = useActiveModel()
   const selectedModel = useAtomValue(selectedModelAtom)
   const { startModel } = useActiveModel()
-  const [queuedMessage, setQueuedMessage] = useState(false)
+  const setQueuedMessage = useSetAtom(queuedMessageAtom)
 
   const modelRef = useRef<Model | undefined>()
   const threadStates = useAtomValue(threadStatesAtom)
   const updateThreadInitSuccess = useSetAtom(updateThreadInitSuccessAtom)
   const activeModelParams = useAtomValue(getActiveThreadModelParamsAtom)
-
   const engineParamsUpdate = useAtomValue(engineParamsUpdateAtom)
-  const setEngineParamsUpdate = useSetAtom(engineParamsUpdateAtom)
 
-  const [reloadModel, setReloadModel] = useState(false)
+  const setEngineParamsUpdate = useSetAtom(engineParamsUpdateAtom)
+  const setReloadModel = useSetAtom(reloadModelAtom)
+  const [fileUpload, setFileUpload] = useAtom(fileUploadAtom)
 
   useEffect(() => {
     modelRef.current = activeModel
@@ -74,9 +82,7 @@ export default function useSendChatMessage() {
       console.error('No active thread')
       return
     }
-
     updateThreadWaiting(activeThread.id, true)
-
     const messages: ChatCompletionMessage[] = [
       activeThread.assistants[0]?.instructions,
     ]
@@ -113,19 +119,19 @@ export default function useSendChatMessage() {
     if (activeModel?.id !== modelId) {
       setQueuedMessage(true)
       startModel(modelId)
-      await WaitForModelStarting(modelId)
+      await waitForModelStarting(modelId)
       setQueuedMessage(false)
     }
     events.emit(MessageEvent.OnMessageSent, messageRequest)
   }
 
   // TODO: Refactor @louis
-  const WaitForModelStarting = async (modelId: string) => {
+  const waitForModelStarting = async (modelId: string) => {
     return new Promise<void>((resolve) => {
       setTimeout(async () => {
         if (modelRef.current?.id !== modelId) {
           console.debug('waiting for model to start')
-          await WaitForModelStarting(modelId)
+          await waitForModelStarting(modelId)
           resolve()
         } else {
           resolve()
@@ -134,8 +140,8 @@ export default function useSendChatMessage() {
     })
   }
 
-  const sendChatMessage = async () => {
-    if (!currentPrompt || currentPrompt.trim().length === 0) return
+  const sendChatMessage = async (message: string) => {
+    if (!message || message.trim().length === 0) return
 
     if (!activeThread) {
       console.error('No active thread')
@@ -160,14 +166,16 @@ export default function useSendChatMessage() {
       const assistantId = activeThread.assistants[0].assistant_id ?? ''
       const assistantName = activeThread.assistants[0].assistant_name ?? ''
       const instructions = activeThread.assistants[0].instructions ?? ''
+      const tools = activeThread.assistants[0].tools ?? []
 
-      const updatedThread: Thread = {
+      const initThread: Thread = {
         ...activeThread,
         assistants: [
           {
             assistant_id: assistantId,
             assistant_name: assistantName,
             instructions: instructions,
+            tools: tools,
             model: {
               id: selectedModel.id,
               settings: settingParams,
@@ -177,18 +185,25 @@ export default function useSendChatMessage() {
           },
         ],
       }
+
       updateThreadInitSuccess(activeThread.id)
-      updateThread(updatedThread)
+      updateThread(initThread)
 
       await extensionManager
         .get<ConversationalExtension>(ExtensionTypeEnum.Conversational)
-        ?.saveThread(updatedThread)
+        ?.saveThread(initThread)
     }
 
     updateThreadWaiting(activeThread.id, true)
 
-    const prompt = currentPrompt.trim()
+    const prompt = message.trim()
     setCurrentPrompt('')
+
+    const base64Blob = fileUpload[0]
+      ? await getBase64(fileUpload[0].file).then()
+      : undefined
+
+    const msgId = ulid()
 
     const messages: ChatCompletionMessage[] = [
       activeThread.assistants[0]?.instructions,
@@ -210,15 +225,40 @@ export default function useSendChatMessage() {
           .concat([
             {
               role: ChatCompletionRole.User,
-              content: prompt,
+              content:
+                selectedModel && base64Blob
+                  ? [
+                      {
+                        type: ChatCompletionMessageContentType.Text,
+                        text: prompt,
+                      },
+                      {
+                        type: ChatCompletionMessageContentType.Doc,
+                        doc_url: {
+                          url: `threads/${activeThread.id}/files/${msgId}.pdf`,
+                        },
+                      },
+                    ]
+                  : prompt,
             } as ChatCompletionMessage,
           ])
       )
-    const msgId = ulid()
 
-    const modelRequest = selectedModel ?? activeThread.assistants[0].model
+    let modelRequest = selectedModel ?? activeThread.assistants[0].model
     if (runtimeParams.stream == null) {
       runtimeParams.stream = true
+    }
+    // Add middleware to the model request with tool retrieval enabled
+    if (
+      activeThread.assistants[0].tools?.some(
+        (tool: AssistantTool) => tool.type === 'retrieval' && tool.enabled
+      )
+    ) {
+      modelRequest = {
+        ...modelRequest,
+        engine: InferenceEngine.tool_retrieval_enabled,
+        proxyEngine: modelRequest.engine,
+      }
     }
     const messageRequest: MessageRequest = {
       id: msgId,
@@ -229,8 +269,44 @@ export default function useSendChatMessage() {
         settings: settingParams,
         parameters: runtimeParams,
       },
+      thread: activeThread,
     }
     const timestamp = Date.now()
+
+    const content: any = []
+
+    if (base64Blob && fileUpload[0]?.type === 'image') {
+      content.push({
+        type: ContentType.Image,
+        text: {
+          value: prompt,
+          annotations: [base64Blob],
+        },
+      })
+    }
+
+    if (base64Blob && fileUpload[0]?.type === 'pdf') {
+      content.push({
+        type: ContentType.Pdf,
+        text: {
+          value: prompt,
+          annotations: [base64Blob],
+          name: fileUpload[0].file.name,
+          size: fileUpload[0].file.size,
+        },
+      })
+    }
+
+    if (prompt && !base64Blob) {
+      content.push({
+        type: ContentType.Text,
+        text: {
+          value: prompt,
+          annotations: [],
+        },
+      })
+    }
+
     const threadMessage: ThreadMessage = {
       id: msgId,
       thread_id: activeThread.id,
@@ -239,18 +315,21 @@ export default function useSendChatMessage() {
       created: timestamp,
       updated: timestamp,
       object: 'thread.message',
-      content: [
-        {
-          type: ContentType.Text,
-          text: {
-            value: prompt,
-            annotations: [],
-          },
-        },
-      ],
+      content: content,
     }
 
     addNewMessage(threadMessage)
+    if (base64Blob) {
+      setFileUpload([])
+    }
+
+    const updatedThread: Thread = {
+      ...activeThread,
+      updated: timestamp,
+    }
+
+    // change last update thread when send message
+    updateThread(updatedThread)
 
     await extensionManager
       .get<ConversationalExtension>(ExtensionTypeEnum.Conversational)
@@ -261,7 +340,7 @@ export default function useSendChatMessage() {
     if (activeModel?.id !== modelId) {
       setQueuedMessage(true)
       startModel(modelId)
-      await WaitForModelStarting(modelId)
+      await waitForModelStarting(modelId)
       setQueuedMessage(false)
     }
 
@@ -272,9 +351,7 @@ export default function useSendChatMessage() {
   }
 
   return {
-    reloadModel,
     sendChatMessage,
     resendChatMessage,
-    queuedMessage,
   }
 }
