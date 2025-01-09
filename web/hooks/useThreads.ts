@@ -9,25 +9,29 @@ import {
 
 import { useSetAtom } from 'jotai'
 
-import useSetActiveThread from './useSetActiveThread'
-
 import { extensionManager } from '@/extension/ExtensionManager'
 import {
-  ModelParams,
+  threadDataReadyAtom,
   threadModelParamsAtom,
   threadStatesAtom,
   threadsAtom,
 } from '@/helpers/atoms/Thread.atom'
+import { ModelParams } from '@/types/model'
 
 const useThreads = () => {
   const setThreadStates = useSetAtom(threadStatesAtom)
   const setThreads = useSetAtom(threadsAtom)
   const setThreadModelRuntimeParams = useSetAtom(threadModelParamsAtom)
-  const { setActiveThread } = useSetActiveThread()
+  const setThreadDataReady = useSetAtom(threadDataReadyAtom)
 
   useEffect(() => {
     const getThreads = async () => {
-      const localThreads = await getLocalThreads()
+      const localThreads = (await getLocalThreads()).sort((a, b) => {
+        return ((a.metadata?.updated_at as number) ?? 0) >
+          ((b.metadata?.updated_at as number) ?? 0)
+          ? -1
+          : 1
+      })
       const localThreadStates: Record<string, ThreadState> = {}
       const threadModelParams: Record<string, ModelParams> = {}
 
@@ -54,24 +58,21 @@ const useThreads = () => {
       setThreadStates(localThreadStates)
       setThreads(localThreads)
       setThreadModelRuntimeParams(threadModelParams)
-
-      if (localThreads.length > 0) {
-        setActiveThread(localThreads[0])
-      }
+      setThreadDataReady(true)
     }
 
     getThreads()
   }, [
-    setActiveThread,
     setThreadModelRuntimeParams,
     setThreadStates,
     setThreads,
+    setThreadDataReady,
   ])
 }
 
 const getLocalThreads = async (): Promise<Thread[]> =>
   (await extensionManager
     .get<ConversationalExtension>(ExtensionTypeEnum.Conversational)
-    ?.getThreads()) ?? []
+    ?.listThreads()) ?? []
 
 export default useThreads

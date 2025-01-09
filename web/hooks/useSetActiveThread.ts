@@ -1,56 +1,51 @@
-import { useCallback } from 'react'
+import { ExtensionTypeEnum, Thread, ConversationalExtension } from '@janhq/core'
 
-import {
-  InferenceEvent,
-  ExtensionTypeEnum,
-  Thread,
-  events,
-  ConversationalExtension,
-} from '@janhq/core'
-
-import { useSetAtom } from 'jotai'
-
-import { loadModelErrorAtom } from './useActiveModel'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 
 import { extensionManager } from '@/extension'
-import { setConvoMessagesAtom } from '@/helpers/atoms/ChatMessage.atom'
+import { activeAssistantAtom } from '@/helpers/atoms/Assistant.atom'
 import {
-  ModelParams,
-  isGeneratingResponseAtom,
+  setConvoMessagesAtom,
+  subscribedGeneratingMessageAtom,
+} from '@/helpers/atoms/ChatMessage.atom'
+import {
+  getActiveThreadIdAtom,
   setActiveThreadIdAtom,
   setThreadModelParamsAtom,
 } from '@/helpers/atoms/Thread.atom'
+import { ModelParams } from '@/types/model'
 
 export default function useSetActiveThread() {
   const setActiveThreadId = useSetAtom(setActiveThreadIdAtom)
-  const setThreadMessage = useSetAtom(setConvoMessagesAtom)
+  const activeThreadId = useAtomValue(getActiveThreadIdAtom)
+  const setThreadMessages = useSetAtom(setConvoMessagesAtom)
   const setThreadModelParams = useSetAtom(setThreadModelParamsAtom)
-  const setIsGeneratingResponse = useSetAtom(isGeneratingResponseAtom)
-  const setLoadModelError = useSetAtom(loadModelErrorAtom)
-
-  const setActiveThread = useCallback(
-    async (thread: Thread) => {
-      setIsGeneratingResponse(false)
-      events.emit(InferenceEvent.OnInferenceStopped, thread.id)
-
-      // load the corresponding messages
-      const messages = await getLocalThreadMessage(thread.id)
-      setThreadMessage(thread.id, messages)
-
-      setActiveThreadId(thread.id)
-      const modelParams: ModelParams = {
-        ...thread.assistants[0]?.model?.parameters,
-        ...thread.assistants[0]?.model?.settings,
-      }
-      setThreadModelParams(thread.id, modelParams)
-    },
-    [
-      setActiveThreadId,
-      setThreadMessage,
-      setThreadModelParams,
-      setIsGeneratingResponse,
-    ]
+  const setActiveAssistant = useSetAtom(activeAssistantAtom)
+  const [messageSubscriber, setMessageSubscriber] = useAtom(
+    subscribedGeneratingMessageAtom
   )
+
+  const setActiveThread = async (thread: Thread) => {
+    if (!thread?.id || activeThreadId === thread.id) return
+
+    setActiveThreadId(thread.id)
+
+    try {
+      const assistantInfo = await getThreadAssistant(thread.id)
+      setActiveAssistant(assistantInfo)
+      // Load local messages only if there are no messages in the state
+      const messages = await getLocalThreadMessage(thread.id).catch(() => [])
+      const modelParams: ModelParams = {
+        ...assistantInfo?.model?.parameters,
+        ...assistantInfo?.model?.settings,
+      }
+      setThreadModelParams(thread?.id, modelParams)
+      setThreadMessages(thread.id, messages)
+      if (messageSubscriber.thread_id !== thread.id) setMessageSubscriber({})
+    } catch (e) {
+      console.error(e)
+    }
+  }
 
   return { setActiveThread }
 }
@@ -58,4 +53,9 @@ export default function useSetActiveThread() {
 const getLocalThreadMessage = async (threadId: string) =>
   extensionManager
     .get<ConversationalExtension>(ExtensionTypeEnum.Conversational)
-    ?.getAllMessages(threadId) ?? []
+    ?.listMessages(threadId) ?? []
+
+const getThreadAssistant = async (threadId: string) =>
+  extensionManager
+    .get<ConversationalExtension>(ExtensionTypeEnum.Conversational)
+    ?.getThreadAssistant(threadId)
